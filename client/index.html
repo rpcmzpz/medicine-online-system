@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>线上购药系统</title>
+<style>
+:root {
+  --primary: #4472C4;
+  --primary-light: #e8f0fe;
+  --danger: #e74c3c;
+  --success: #27ae60;
+  --warning: #f39c12;
+  --bg: #f5f6fa;
+  --card-bg: #ffffff;
+  --text: #2c3e50;
+  --text-light: #7f8c8d;
+  --border: #e1e5eb;
+  --radius: 8px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); line-height:1.6; }
+a { text-decoration:none; color: var(--primary); }
+.container { max-width:1200px; margin:0 auto; padding:0 16px; }
+header { background: var(--card-bg); box-shadow: var(--shadow); position:sticky; top:0; z-index:100; }
+header .container { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; }
+.logo { font-size:1.4em; font-weight:700; color: var(--primary); }
+.nav-links { display:flex; gap:20px; align-items:center; }
+.nav-links a, .nav-links button { padding:6px 14px; border-radius:var(--radius); font-size:0.95em; cursor:pointer; border:none; background:transparent; color: var(--text); }
+.nav-links .btn-primary { background:var(--primary); color:#fff; }
+.card { background:var(--card-bg); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px; margin:16px 0; }
+.form-group { margin-bottom:16px; }
+.form-group label { display:block; margin-bottom:4px; font-weight:500; font-size:0.9em; }
+.form-group input, .form-group select, .form-group textarea { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:0.95em; outline:none; transition:border .2s; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color:var(--primary); }
+.btn { padding:10px 20px; border:none; border-radius:var(--radius); font-size:0.95em; cursor:pointer; transition:all .2s; }
+.btn-primary { background:var(--primary); color:#fff; }
+.btn-primary:hover { opacity:0.9; }
+.btn-danger { background:var(--danger); color:#fff; }
+.btn-success { background:var(--success); color:#fff; }
+.btn-sm { padding:6px 12px; font-size:0.85em; }
+.alert { padding:12px 16px; border-radius:var(--radius); margin-bottom:16px; }
+.alert-error { background:#fde8e8; color:var(--danger); border:1px solid #f5c6cb; }
+.alert-success { background:#d4edda; color:var(--success); border:1px solid #c3e6cb; }
+.grid-3 { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:16px; }
+.medicine-card { cursor:pointer; transition:transform .2s; }
+.medicine-card:hover { transform:translateY(-2px); }
+.medicine-card img { width:100%; height:160px; object-fit:cover; border-radius:var(--radius) var(--radius) 0 0; }
+.medicine-card .info { padding:12px; }
+.medicine-card .name { font-weight:600; margin-bottom:4px; }
+.medicine-card .price { color:var(--danger); font-size:1.1em; font-weight:700; }
+.medicine-card .price .orig { color:var(--text-light); text-decoration:line-through; font-size:0.8em; margin-left:8px; font-weight:400; }
+.tag { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.75em; margin-left:6px; }
+.tag-otc { background:#d4edda; color:#155724; }
+.tag-rx { background:#fff3cd; color:#856404; }
+table { width:100%; border-collapse:collapse; }
+table th, table td { padding:10px 12px; text-align:left; border-bottom:1px solid var(--border); font-size:0.9em; }
+table th { background: var(--bg); font-weight:600; }
+.hidden { display:none !important; }
+.flex { display:flex; }
+.flex-between { justify-content:space-between; }
+.gap-sm { gap:8px; }
+.gap-md { gap:16px; }
+.text-right { text-align:right; }
+.text-center { text-align:center; }
+.mt-1 { margin-top:8px; }
+.mt-2 { margin-top:16px; }
+.mb-2 { margin-bottom:16px; }
+.badge { display:inline-block; padding:3px 10px; border-radius:12px; font-size:0.8em; }
+.badge-pending { background:#fff3cd; color:#856404; }
+.badge-done { background:#d4edda; color:#155724; }
+.badge-cancel { background:#f8d7da; color:#721c24; }
+.modal-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.4); z-index:200; display:flex; align-items:center; justify-content:center; }
+.modal { background:#fff; border-radius:var(--radius); max-width:500px; width:90%; max-height:80vh; overflow-y:auto; padding:24px; }
+.tabs { display:flex; gap:0; border-bottom:2px solid var(--border); margin-bottom:20px; }
+.tab { padding:8px 20px; cursor:pointer; border:none; background:none; font-size:0.95em; color:var(--text-light); }
+.tab.active { color:var(--primary); border-bottom:2px solid var(--primary); margin-bottom:-2px; font-weight:600; }
+input[type=number] { width:60px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="container">
+    <div class="logo">💊 线上购药系统</div>
+    <div class="nav-links" id="navLinks"></div>
+  </div>
+</header>
+<div class="container" id="mainContent"></div>
+
+<script>
+const API = 'http://localhost:3000/api/v1';
+let token = localStorage.getItem('token');
+let currentUser = JSON.parse(localStorage.getItem('user') || 'null');
+
+async function api(path, options={}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  // Don't set content-type for FormData
+  if (options.body instanceof FormData) delete headers['Content-Type'];
+  const res = await fetch(API + path, { ...options, headers });
+  const data = await res.json();
+  if (data.code === 40100 || data.code === 40101) { logout(); throw new Error(data.message); }
+  if (res.ok) return data;
+  throw new Error(data.message || '请求失败');
+}
+
+function logout() { localStorage.clear(); token=null; currentUser=null; location.reload(); }
+function loginUser(u, t) { token=t; currentUser=u; localStorage.setItem('token',t); localStorage.setItem('user',JSON.stringify(u)); location.reload(); }
+function showAlert(msg, type='error') { return `<div class="alert alert-${type}">${msg}</div>`; }
+
+function renderNav() {
+  const nav = document.getElementById('navLinks');
+  if (!currentUser) {
+    nav.innerHTML = '<a href="#" onclick="showPage(\'home\')">首页</a><a href="#" onclick="showPage(\'medicines\')">药品浏览</a><button class="btn-primary btn-sm" onclick="showPage(\'login\')">登录</button>';
+  } else {
+    const labels = {0:'普通用户',1:'慢病用户',2:'管理员',3:'药师',4:'配送员'};
+    let links = `<a href="#" onclick="showPage('home')">首页</a><a href="#" onclick="showPage('medicines')">药品浏览</a>`;
+    if (currentUser.user_type <= 1) links += '<a href="#" onclick="showPage(\'profile\')">个人资料</a><a href="#" onclick="showPage(\'cart\')">购物车</a><a href="#" onclick="showPage(\'orders\')">我的订单</a><a href="#" onclick="showPage(\'consultations\')">药师咨询</a>';
+    if (currentUser.user_type === 1) links += '<a href="#" onclick="showPage(\'reminders\')">用药提醒</a>';
+    if (currentUser.user_type === 2) links += '<a href="#" onclick="showPage(\'admin\')">后台管理</a><a href="#" onclick="showPage(\'adminStats\')">数据统计</a>';
+    if (currentUser.user_type === 3) links += '<a href="#" onclick="showPage(\'pharmacist\')">药师中心</a>';
+    if (currentUser.user_type === 4) links += '<a href="#" onclick="showPage(\'delivery\')">配送中心</a>';
+    links += `<span style="color:var(--text-light)">${currentUser.real_name||currentUser.username}(${labels[currentUser.user_type]||''})</span>`;
+    links += '<button class="btn-danger btn-sm" onclick="logout()">退出</button>';
+    nav.innerHTML = links;
+  }
+}
+
+// ---- PAGES ======================
+function showPage(page, params) {
+  renderNav();
+  const mc = document.getElementById('mainContent');
+  const pages = { home, login, register, medicines, medicineDetail, cart, orders, orderDetail, consultations, profile, reminders, admin, adminStats, pharmacist, delivery };
+  if (pages[page]) pages[page](mc, params);
+}
+
+async function home(mc) {
+  mc.innerHTML = '<div class="card"><h2>欢迎使用线上购药系统</h2><p style="margin-top:12px;color:var(--text-light)">提供安全、便捷、合规的在线购药服务，支持处方审核、药师咨询、用药提醒</p></div>';
+  const data = await api('/medicines?page_size=6').catch(() => null);
+  if (data?.data?.list) {
+    let html = '<h3 style="margin:20px 0 12px">热门药品</h3><div class="grid-3">';
+    data.data.list.forEach(m => {
+      html += `<div class="card medicine-card" onclick="showPage('medicineDetail',${m.medicine_id})">
+        <div style="text-align:center;padding:20px;font-size:3em;background:var(--primary-light);border-radius:var(--radius) var(--radius) 0 0">💊</div>
+        <div class="info"><div class="name">${m.name}${m.drug_type===1?'<span class="tag tag-rx">处方药</span>':'<span class="tag tag-otc">OTC</span>'}</div>
+        <div class="price">¥${m.price}<span class="orig">¥${m.original_price||m.price}</span></div>
+        </div></div>`;
+    });
+    mc.innerHTML += html + '</div>';
+  }
+  if (currentUser) { showPage('home', params); return; }
+  mc.innerHTML += '<div class="card text-center"><p>请登录后使用完整功能</p><button class="btn btn-primary mt-1" onclick="showPage(\'login\')">立即登录</button></div>';
+}
+
+function login(mc) {
+  mc.innerHTML = `<div class="card" style="max-width:400px;margin:40px auto">
+    <h3>用户登录</h3><div id="loginAlert"></div>
+    <div class="form-group"><label>用户名</label><input id="loginUsername" placeholder="请输入用户名"></div>
+    <div class="form-group"><label>密码</label><input type="password" id="loginPassword" placeholder="请输入密码"></div>
+    <div class="flex gap-sm"><button class="btn btn-primary" onclick="doLogin()">登录</button>
+    <button class="btn" onclick="showPage('register')">去注册</button></div>
+  </div>`;
+  document.getElementById('loginPassword')?.addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value;
+  const password = document.getElementById('loginPassword').value;
+  try {
+    const data = await api('/auth/login', { method:'POST', body:JSON.stringify({username,password}) });
+    loginUser(data.data.user_info, data.data.access_token);
+  } catch(e) { document.getElementById('loginAlert').innerHTML = showAlert(e.message); }
+}
+
+function register(mc) {
+  mc.innerHTML = `<div class="card" style="max-width:500px;margin:40px auto"><h3>用户注册</h3><div id="regAlert"></div>
+    <div class="form-group"><label>用户名</label><input id="regUsername"></div>
+    <div class="form-group"><label>密码</label><input type="password" id="regPassword"></div>
+    <div class="form-group"><label>手机号</label><input id="regPhone"></div>
+    <div class="form-group"><label>真实姓名</label><input id="regRealName"></div>
+    <div class="form-group"><label>用户类型</label><select id="regUserType"><option value="0">普通用户</option><option value="1">慢病用户</option></select></div>
+    <button class="btn btn-primary" onclick="doRegister()">注册</button>
+  </div>`;
+}
+
+async function doRegister() {
+  const body = { username:document.getElementById('regUsername').value, password:document.getElementById('regPassword').value, phone:document.getElementById('regPhone').value, real_name:document.getElementById('regRealName').value, user_type:Number(document.getElementById('regUserType').value) };
+  try {
+    await api('/auth/register', { method:'POST', body:JSON.stringify(body) });
+    document.getElementById('regAlert').innerHTML = showAlert('注册成功，请登录','success');
+    setTimeout(()=>showPage('login'),1000);
+  } catch(e) { document.getElementById('regAlert').innerHTML = showAlert(e.message); }
+}
+
+async function medicines(mc) {
+  const data = await api('/medicines/categories').catch(()=>null);
+  mc.innerHTML = `<h3 style="margin:16px 0">药品浏览</h3>
+    <div class="card"><div class="form-group flex gap-md" style="align-items:end">
+      <div style="flex:1"><input id="searchKeyword" placeholder="搜索药品名称/通用名/品牌..."></div>
+      <div><select id="searchCategory"><option value="">全部分类</option>${renderCategoryOptions(data?.data?.list||[])}</select></div>
+      <div><select id="searchSort"><option value="">默认排序</option><option value="price_asc">价格从低到高</option><option value="price_desc">价格从高到低</option><option value="sales_desc">销量最高</option></select></div>
+      <div><button class="btn btn-primary" onclick="searchMedicines()">搜索</button></div>
+    </div></div>
+    <div class="grid-3" id="medicineList"></div>`;
+  searchMedicines();
+}
+
+function renderCategoryOptions(cats, depth=0) {
+  let h = '';
+  cats.forEach(c => { h += `<option value="${c.category_id}">${'　'.repeat(depth)}${c.name}</option>`; if(c.children) h += renderCategoryOptions(c.children, depth+1); });
+  return h;
+}
+
+async function searchMedicines() {
+  const params = new URLSearchParams();
+  const kw = document.getElementById('searchKeyword')?.value; if(kw) params.set('keyword',kw);
+  const cat = document.getElementById('searchCategory')?.value; if(cat) params.set('category_id',cat);
+  const sort = document.getElementById('searchSort')?.value; if(sort) params.set('sort_by',sort);
+  const data = await api('/medicines?'+params.toString());
+  const list = document.getElementById('medicineList');
+  if (data?.data?.list?.length) {
+    list.innerHTML = data.data.list.map(m => `<div class="card medicine-card" onclick="showPage('medicineDetail',${m.medicine_id})">
+      <div style="text-align:center;padding:20px;font-size:3em;background:var(--primary-light);border-radius:var(--radius) var(--radius) 0 0">💊</div>
+      <div class="info"><div class="name">${m.name}${m.drug_type===1?'<span class="tag tag-rx">处方药</span>':'<span class="tag tag-otc">OTC</span>'}</div>
+      <div style="color:var(--text-light);font-size:0.85em">${m.brand||''} ${m.specification||''}</div>
+      <div class="price">¥${m.price}<span class="orig">¥${m.original_price||m.price}</span></div>
+      <div style="color:var(--text-light);font-size:0.8em">销量:${m.sales_count} ${m.stock_available?'':'<span style="color:red">缺货</span>'}</div></div></div>`).join('');
+  } else { list.innerHTML = '<div class="card text-center" style="grid-column:1/-1">暂无药品数据</div>'; }
+}
+
+async function medicineDetail(mc, id) {
+  const data = await api('/medicines/'+id);
+  const m = data.data;
+  mc.innerHTML = `<div class="card">
+    <h3>${m.name}${m.drug_type===1?'<span class="tag tag-rx">处方药</span>':'<span class="tag tag-otc">OTC</span>'}</h3>
+    <p style="color:var(--text-light)">通用名:${m.generic_name||'-'} | 品牌:${m.brand||'-'} | 规格:${m.specification||'-'} | 批准文号:${m.approval_number||'-'}</p>
+    <p style="font-size:1.4em;color:var(--danger);font-weight:700;margin:12px 0">¥${m.price} <span style="font-size:0.6em;color:var(--text-light);text-decoration:line-through">¥${m.original_price||m.price}</span></p>
+    <p>库存:${m.stock_quantity>0?m.stock_quantity:'缺货'} | 评分:${m.avg_rating}/5 (${m.reviews_count}条评价)</p>
+    <p style="margin:12px 0;color:var(--text-light)">${m.description||''}</p>
+    ${currentUser&&currentUser.user_type<=1?`<button class="btn btn-primary" onclick="addToCart(${m.medicine_id})">加入购物车</button>`:''}
+    <button class="btn" onclick="showPage('medicines')">返回列表</button>
+    ${m.reviews?.length?`<h4 class="mt-2">用户评价</h4>${m.reviews.map(r=>`<div class="card" style="margin:8px 0"><div class="flex flex-between"><span>${r.user_name}</span><span>${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</span></div><p>${r.content}</p></div>`).join('')}`:''}
+  </div>`;
+}
+
+async function addToCart(medicineId) {
+  try {
+    if (!currentUser) return alert('请先登录');
+    await api('/cart/items', { method:'POST', body:JSON.stringify({medicine_id:medicineId,quantity:1}) });
+    alert('已加入购物车');
+  } catch(e) { alert(e.message); }
+}
+
+async function cart(mc) {
+  mc.innerHTML = '<h3 style="margin:16px 0">购物车</h3><div id="cartContent">加载中...</div>';
+  try {
+    const data = await api('/cart/items');
+    const cart = data.data;
+    if (!cart.list.length) { document.getElementById('cartContent').innerHTML = '<div class="card text-center">购物车为空</div>'; return; }
+    let html = '<div class="card"><table><tr><th>商品</th><th>单价</th><th>数量</th><th>小计</th><th>操作</th></tr>';
+    cart.list.forEach(item => {
+      html += `<tr><td>${item.medicine_name}${item.drug_type===1?' <span class="tag tag-rx">处方药</span>':''}</td><td>¥${item.price}</td>
+        <td><input type="number" value="${item.quantity}" min="1" max="${item.max_quantity}" onchange="updateCartQty(${item.cart_id},this.value)" style="width:60px"></td>
+        <td>¥${item.subtotal.toFixed(2)}</td><td><button class="btn btn-danger btn-sm" onclick="removeCart(${item.cart_id})">删除</button></td></tr>`;
+    });
+    html += `</table><p class="text-right mt-2"><strong>合计: ¥${cart.total_amount.toFixed(2)}</strong></p>
+    <div class="flex gap-sm" style="justify-content:flex-end"><button class="btn btn-primary" onclick="showPage('orders','checkout')">去结算</button></div></div>`;
+    document.getElementById('cartContent').innerHTML = html;
+  } catch(e) { document.getElementById('cartContent').innerHTML = showAlert(e.message); }
+}
+
+async function updateCartQty(cartId, qty) { try { await api('/cart/items/'+cartId, { method:'PATCH', body:JSON.stringify({quantity:Number(qty)}) }); showPage('cart'); } catch(e) { alert(e.message); showPage('cart'); } }
+async function removeCart(cartId) { try { await api('/cart/items/'+cartId, { method:'DELETE' }); showPage('cart'); } catch(e) { alert(e.message); } }
+
+async function orders(mc, action) {
+  if (action === 'checkout') {
+    try {
+      const cartData = await api('/cart/items');
+      const addrData = await api('/user/addresses');
+      const addresses = addrData.data.list;
+      if (!addresses.length) { alert('请先添加收货地址'); showPage('home'); return; }
+      mc.innerHTML = `<div class="card" style="max-width:600px;margin:40px auto"><h3>确认订单</h3><div id="checkoutAlert"></div>
+        <div id="checkoutItems"></div>
+        <div class="form-group"><label>收货地址</label><select id="checkoutAddress">${addresses.map(a=>`<option value="${a.address_id}">${a.province}${a.city}${a.district} ${a.detail} (${a.receiver_name} ${a.phone})</option>`).join('')}</select></div>
+        <div class="form-group"><label>备注</label><input id="checkoutRemark" placeholder="选填"></div>
+        <button class="btn btn-primary" onclick="doCreateOrder()">提交订单</button></div>`;
+      document.getElementById('checkoutItems').innerHTML = cartData.data.list.map(i=>`<p>${i.medicine_name} ×${i.quantity}  ¥${i.subtotal.toFixed(2)}</p>`).join('')+`<p class="text-right"><strong>合计: ¥${cartData.data.total_amount.toFixed(2)}</strong></p>`;
+    } catch(e) { alert(e.message); showPage('cart'); }
+    return;
+  }
+  mc.innerHTML = '<h3 style="margin:16px 0">我的订单</h3><div id="orderList">加载中...</div>';
+  try {
+    const data = await api('/orders');
+    const orders = data.data.list;
+    if (!orders.length) { document.getElementById('orderList').innerHTML = '<div class="card text-center">暂无订单</div>'; return; }
+    const statusLabels = ['待支付','待审核','待配药','待配送','配送中','已完成','已取消','已退款'];
+    let html = '<div class="card"><table><tr><th>订单编号</th><th>金额</th><th>状态</th><th>时间</th><th>操作</th></tr>';
+    orders.forEach(o => {
+      html += `<tr><td>${o.order_no}</td><td>¥${Number(o.actual_amount).toFixed(2)}</td><td><span class="badge ${o.order_status>4?'badge-done':o.order_status===6?'badge-cancel':'badge-pending'}">${statusLabels[o.order_status]}</span></td><td>${new Date(o.created_at).toLocaleString()}</td>
+        <td><button class="btn btn-sm" onclick="showPage('orderDetail',${o.order_id})">详情</button>
+        ${o.order_status===0?`<button class="btn btn-sm btn-primary" onclick="payOrder(${o.order_id})">支付</button><button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.order_id})">取消</button>`:''}
+        ${o.order_status===3||o.order_status===4?`<button class="btn btn-sm btn-success" onclick="confirmOrder(${o.order_id})">确认收货</button>`:''}</td></tr>`;
+    });
+    document.getElementById('orderList').innerHTML = html + '</table></div>';
+  } catch(e) { document.getElementById('orderList').innerHTML = showAlert(e.message); }
+}
+
+async function doCreateOrder() {
+  const cartData = await api('/cart/items');
+  const cartIds = cartData.data.list.map(i=>i.cart_id);
+  const body = { cart_item_ids: cartIds, address_id: Number(document.getElementById('checkoutAddress').value), remark: document.getElementById('checkoutRemark').value };
+  const hasRx = cartData.data.list.some(i=>i.drug_type===1);
+  if (hasRx) {
+    body.prescription_ids = [];
+    try { const rxData = await api('/prescriptions/'+(await api('/user/profile')).data.user_id+'/prescriptions'); } catch(e) {}
+    alert('处方药订单需先上传处方。请跳转到个人中心上传处方后再下单。');
+    return;
+  }
+  try {
+    const data = await api('/orders', { method:'POST', body:JSON.stringify(body) });
+    showPage('orderDetail', data.data.order_id);
+  } catch(e) { document.getElementById('checkoutAlert').innerHTML = showAlert(e.message); }
+}
+
+async function orderDetail(mc, orderId) {
+  const data = await api('/orders/'+orderId);
+  const o = data.data;
+  mc.innerHTML = `<div class="card"><h3>订单详情</h3><p>订单编号: ${o.order_no} | 状态: ${o.order_status_label}</p>
+    <table><tr><th>商品</th><th>单价</th><th>数量</th><th>小计</th></tr>${o.items.map(i=>`<tr><td>${i.medicine_name}</td><td>¥${i.price}</td><td>${i.quantity}</td><td>¥${i.subtotal}</td></tr>`).join('')}</table>
+    <div class="mt-2 flex flex-between"><span>总金额: ¥${Number(o.total_amount).toFixed(2)} | 实付: ¥${Number(o.actual_amount).toFixed(2)}</span></div>
+    <p>收货地址: ${o.address?.detail||'无'}</p>
+    <p>下单时间: ${new Date(o.created_at).toLocaleString()} | 支付时间: ${o.paid_at?new Date(o.paid_at).toLocaleString():'未支付'} | 完成时间: ${o.completed_at?new Date(o.completed_at).toLocaleString():'未完成'}</p>
+    <button class="btn mt-2" onclick="showPage('orders')">返回</button></div>`;
+}
+
+async function payOrder(orderId) {
+  const method = prompt('选择支付方式:\n0-微信\n1-支付宝\n2-银联','0');
+  if (method===null) return;
+  try { await api('/orders/'+orderId+'/pay', { method:'POST', body:JSON.stringify({payment_method:Number(method)}) }); alert('支付成功'); showPage('orders'); }
+  catch(e) { alert(e.message); }
+}
+
+async function cancelOrder(orderId) {
+  if (!confirm('确认取消该订单？')) return;
+  try { await api('/orders/'+orderId+'/cancel', { method:'PATCH' }); showPage('orders'); } catch(e) { alert(e.message); }
+}
+
+async function confirmOrder(orderId) {
+  if (!confirm('确认已收到商品？')) return;
+  try { await api('/orders/'+orderId+'/confirm', { method:'PATCH' }); showPage('orders'); } catch(e) { alert(e.message); }
+}
+
+async function consultations(mc, q) {
+  if (q === 'create') {
+    mc.innerHTML = `<div class="card" style="max-width:500px;margin:40px auto"><h3>提交咨询</h3><div id="cAlert"></div>
+      <div class="form-group"><label>问题描述（≥5字）</label><textarea id="cQuestion" rows="4"></textarea></div>
+      <button class="btn btn-primary" onclick="doConsult()">提交咨询</button></div>`;
+    return;
+  }
+  mc.innerHTML = `<h3 style="margin:16px 0">药师咨询 <button class="btn btn-primary btn-sm" onclick="showPage('consultations','create')">新建咨询</button></h3><div id="consultList">加载中...</div>`;
+  try {
+    const data = await api('/consultations');
+    const list = data.data.list;
+    const statusLabels = {0:'待回复',1:'已回复',2:'已关闭'};
+    document.getElementById('consultList').innerHTML = list.length ? list.map(c=>`<div class="card">
+      <div class="flex flex-between"><span><strong>${c.question}</strong></span><span class="badge ${c.status===1?'badge-done':'badge-pending'}">${statusLabels[c.status]}</span></div>
+      ${c.answer?`<p style="margin-top:8px;color:var(--success)">药师回复: ${c.answer} (${c.pharmacist_name||''})</p>`:''}
+      <p style="color:var(--text-light);font-size:0.85em">${new Date(c.created_at).toLocaleString()}</p></div>`).join('') : '<div class="card text-center">暂无咨询记录</div>';
+  } catch(e) { document.getElementById('consultList').innerHTML = showAlert(e.message); }
+}
+
+async function doConsult() {
+  try { await api('/consultations', { method:'POST', body:JSON.stringify({ question:document.getElementById('cQuestion').value }) }); alert('提交成功'); showPage('consultations'); }
+  catch(e) { document.getElementById('cAlert').innerHTML = showAlert(e.message); }
+}
+
+async function reminders(mc, action) {
+  if (action === 'create') {
+    mc.innerHTML = `<div class="card" style="max-width:500px;margin:40px auto"><h3>创建用药提醒</h3><div id="rAlert"></div>
+      <div class="form-group"><label>药品名称</label><input id="rMedicineName"></div>
+      <div class="form-group"><label>每次用量</label><input id="rDosage" placeholder="如:1片"></div>
+      <div class="form-group"><label>频率</label><input id="rFrequency" placeholder="如:每日3次"></div>
+      <div class="form-group"><label>提醒时间（用逗号分隔）</label><input id="rTimes" placeholder="08:00,12:30,18:30"></div>
+      <div class="form-group"><label>开始日期</label><input type="date" id="rStartDate"></div>
+      <div class="form-group"><label>结束日期</label><input type="date" id="rEndDate"></div>
+      <button class="btn btn-primary" onclick="doCreateReminder()">创建提醒</button></div>`;
+    return;
+  }
+  mc.innerHTML = `<h3 style="margin:16px 0">用药提醒 <button class="btn btn-primary btn-sm" onclick="showPage('reminders','create')">新建提醒</button></h3><div id="reminderList">加载中...</div>`;
+  try {
+    const data = await api('/reminders');
+    document.getElementById('reminderList').innerHTML = data.data.list.length ? data.data.list.map(r=>`<div class="card flex flex-between">
+      <div><strong>${r.medicine_name}</strong> | ${r.dosage} | ${r.frequency} | ${JSON.parse(r.remind_times).join(',')}</div>
+      <div><button class="btn btn-sm btn-danger" onclick="deleteReminder(${r.reminder_id})">删除</button></div></div>`).join('') : '<div class="card text-center">暂无提醒</div>';
+  } catch(e) { document.getElementById('reminderList').innerHTML = showAlert(e.message); }
+}
+async function doCreateReminder() {
+  try {
+    await api('/reminders', { method:'POST', body:JSON.stringify({ medicine_name:document.getElementById('rMedicineName').value, dosage:document.getElementById('rDosage').value, frequency:document.getElementById('rFrequency').value, remind_times:document.getElementById('rTimes').value.split(',').map(s=>s.trim()), start_date:document.getElementById('rStartDate').value, end_date:document.getElementById('rEndDate').value || null }) });
+    alert('创建成功'); showPage('reminders');
+  } catch(e) { document.getElementById('rAlert').innerHTML = showAlert(e.message); }
+}
+async function deleteReminder(id) { try { await api('/reminders/'+id, { method:'DELETE' }); showPage('reminders'); } catch(e) { alert(e.message); } }
+
+async function admin(mc) {
+  mc.innerHTML = `<div class="tabs">
+    <button class="tab active" onclick="adminTab('medicines',this)">药品管理</button>
+    <button class="tab" onclick="adminTab('orders',this)">订单管理</button></div><div id="adminTabContent">加载中...</div>`;
+  adminTab('medicines', document.querySelector('.tab'));
+}
+async function adminTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  const c = document.getElementById('adminTabContent');
+  try {
+    if (tab==='medicines') {
+      const data = await api('/admin/medicines?page_size=100');
+      c.innerHTML = `<button class="btn btn-primary mb-2" onclick="showAddMedicine()">添加药品</button>
+        <table><tr><th>ID</th><th>名称</th><th>品牌</th><th>价格</th><th>状态</th><th>操作</th></tr>
+        ${(data?.data?.list||[]).map(m=>`<tr><td>${m.medicine_id}</td><td>${m.name}</td><td>${m.brand||''}</td><td>¥${m.price}</td><td>${m.status===1?'上架':'下架'}</td>
+          <td><button class="btn btn-sm" onclick="toggleMedicine(${m.medicine_id},${m.status})">${m.status===1?'下架':'上架'}</button></td></tr>`).join('')}</table>`;
+    } else {
+      const data = await api('/admin/orders?page_size=100');
+      const sl = ['待支付','待审核','待配药','待配送','配送中','已完成','已取消','已退款'];
+      c.innerHTML = `<table><tr><th>订单编号</th><th>用户</th><th>金额</th><th>状态</th><th>操作</th></tr>
+        ${(data?.data?.list||[]).map(o=>`<tr><td>${o.order_no}</td><td>${o.username||o.user_id}</td><td>¥${Number(o.actual_amount).toFixed(2)}</td><td>${sl[o.order_status]}</td>
+          <td>${o.order_status===2?`<button class="btn btn-sm btn-primary" onclick="dispenseOrder(${o.order_id})">配药</button>`:''}${o.order_status===3?`<button class="btn btn-sm" onclick="shipOrder(${o.order_id})">发货</button>`:''}</td></tr>`).join('')}</table>`;
+    }
+  } catch(e) { c.innerHTML = showAlert('加载失败: ' + e.message); }
+}
+function showAddMedicine() {
+  document.getElementById('mainContent').insertAdjacentHTML('beforeend', `<div class="modal-overlay"><div class="modal"><h3>添加药品</h3><div id="addAlert"></div>
+    <div class="form-group"><label>分类ID</label><input id="amCatId" value="6"></div>
+    <div class="form-group"><label>名称</label><input id="amName"></div>
+    <div class="form-group"><label>品牌</label><input id="amBrand"></div>
+    <div class="form-group"><label>规格</label><input id="amSpec"></div>
+    <div class="form-group"><label>类型</label><select id="amType"><option value="0">OTC</option><option value="1">处方药</option></select></div>
+    <div class="form-group"><label>价格</label><input type="number" id="amPrice" step="0.01"></div>
+    <div class="form-group"><label>库存</label><input type="number" id="amStock" value="100"></div>
+    <div class="flex gap-sm"><button class="btn btn-primary" onclick="doAddMedicine()">保存</button><button class="btn" onclick="this.closest('.modal-overlay').remove()">取消</button></div></div></div>`);
+}
+async function doAddMedicine() {
+  try {
+    await api('/admin/medicines', { method:'POST', body:JSON.stringify({
+      category_id:Number(document.getElementById('amCatId').value), name:document.getElementById('amName').value,
+      brand:document.getElementById('amBrand').value, specification:document.getElementById('amSpec').value,
+      drug_type:Number(document.getElementById('amType').value), price:Number(document.getElementById('amPrice').value),
+      stock_quantity:Number(document.getElementById('amStock').value)
+    })});
+    document.querySelector('.modal-overlay')?.remove();
+    showPage('admin');
+  } catch(e) { document.getElementById('addAlert').innerHTML = showAlert(e.message); }
+}
+async function toggleMedicine(id, status) {
+  try { await api('/admin/medicines/'+id+'/status', { method:'PATCH', body:JSON.stringify({status:status===1?0:1}) }); showPage('admin'); } catch(e) { alert(e.message); }
+}
+async function dispenseOrder(id) { try { await api('/admin/orders/'+id+'/dispense', { method:'PATCH' }); showPage('admin'); adminTab('orders', document.querySelectorAll('.tab')[1]); } catch(e) { alert(e.message); } }
+async function shipOrder(id) { try { await api('/admin/orders/'+id+'/ship', { method:'PATCH' }); showPage('admin'); adminTab('orders', document.querySelectorAll('.tab')[1]); } catch(e) { alert(e.message); } }
+
+async function adminStats(mc) {
+  mc.innerHTML = '<h3 style="margin:16px 0">数据统计</h3><div id="statsContent">加载中...</div>';
+  try {
+    const [sales, rank, status] = await Promise.all([api('/admin/statistics/sales?period=day'), api('/admin/statistics/medicine-ranking?limit=10'), api('/admin/statistics/order-status')]);
+    document.getElementById('statsContent').innerHTML = `
+      <div class="card"><h4>销售概览</h4><p>总销售额: ¥${sales.data.total_sales.toFixed(2)} | 订单数: ${sales.data.total_orders} | 客单价: ¥${sales.data.avg_order_amount.toFixed(2)} | 近30日新用户: ${sales.data.new_users}</p></div>
+      <div class="card"><h4>药品销量TOP10</h4><table><tr><th>药品</th><th>销量</th><th>销售额</th></tr>${rank.data.list.map(r=>`<tr><td>${r.medicine_name}</td><td>${r.total_quantity}</td><td>¥${r.total_sales.toFixed(2)}</td></tr>`).join('')}</table></div>
+      <div class="card"><h4>订单状态分布</h4><p>待支付:${status.data.pending_payment} | 待审核:${status.data.pending_review} | 待配药:${status.data.pending_dispense} | 待配送:${status.data.pending_delivery} | 配送中:${status.data.delivering} | 已完成:${status.data.completed} | 已取消:${status.data.cancelled}</p></div>`;
+  } catch(e) { document.getElementById('statsContent').innerHTML = showAlert(e.message); }
+}
+
+async function pharmacist(mc) {
+  mc.innerHTML = `<div class="tabs"><button class="tab active" onclick="pharmTab('prescriptions',this)">待审核处方</button><button class="tab" onclick="pharmTab('consultations',this)">待回复咨询</button></div><div id="pharmContent">加载中...</div>`;
+  pharmTab('prescriptions', document.querySelector('.tab'));
+}
+async function pharmTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  const c = document.getElementById('pharmContent');
+  if (tab==='prescriptions') {
+    const data = await api('/pharmacist/prescriptions/pending');
+    c.innerHTML = (data.data.list||[]).length ? data.data.list.map(rx=>`<div class="card"><p>处方ID: ${rx.prescription_id} | 用户: ${rx.user_name}</p>
+      <div class="flex gap-sm mt-1"><button class="btn btn-success btn-sm" onclick="reviewRx(${rx.prescription_id},1)">通过</button>
+      <button class="btn btn-danger btn-sm" onclick="reviewRx(${rx.prescription_id},2)">驳回</button></div></div>`).join('') : '<div class="card text-center">暂无待审核处方</div>';
+  } else {
+    const data = await api('/pharmacist/consultations/pending');
+    c.innerHTML = (data.data.list||[]).length ? data.data.list.map(con=>`<div class="card"><p><strong>${con.question}</strong></p><p style="color:var(--text-light)">用户: ${con.real_name||con.username}</p>
+      <button class="btn btn-primary btn-sm mt-1" onclick="replyConsult(${con.consultation_id})">回复</button></div>`).join('') : '<div class="card text-center">暂无待回复咨询</div>';
+  }
+}
+async function reviewRx(id, status) {
+  const remark = status===2 ? prompt('请输入驳回原因:') : '';
+  if (status===2 && !remark) return;
+  try { await api('/pharmacist/prescriptions/'+id+'/review', { method:'PATCH', body:JSON.stringify({review_status:status, review_remark:remark}) }); showPage('pharmacist'); } catch(e) { alert(e.message); }
+}
+async function replyConsult(id) {
+  const answer = prompt('请输入回复内容:');
+  if (!answer) return;
+  try { await api('/pharmacist/consultations/'+id+'/reply', { method:'PATCH', body:JSON.stringify({answer}) }); showPage('pharmacist'); } catch(e) { alert(e.message); }
+}
+
+// ---- 个人资料页 ======================
+async function profile(mc, tab) {
+  if (!currentUser) { showPage('login'); return; }
+  let html = `<h3 style="margin:16px 0">个人资料</h3>
+  <div class="tabs"><button class="tab ${tab!=='addresses'?'active':''}" onclick="profileTab('info',this)">基本信息</button>
+  <button class="tab ${tab==='addresses'?'active':''}" onclick="profileTab('addresses',this)">收货地址</button></div>
+  <div id="profileContent"></div>`;
+  mc.innerHTML = html;
+  tab === 'addresses' ? profileAddresses() : profileInfo();
+}
+
+async function profileTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  tab === 'addresses' ? profileAddresses() : profileInfo();
+}
+
+async function profileInfo() {
+  const c = document.getElementById('profileContent');
+  try {
+    const data = await api('/user/profile');
+    const u = data.data;
+    c.innerHTML = `<div class="card" style="max-width:500px"><div id="pAlert"></div>
+      <div class="form-group"><label>用户名</label><input value="${u.username}" disabled></div>
+      <div class="form-group"><label>真实姓名</label><input id="pRealName" value="${u.real_name||''}"></div>
+      <div class="form-group"><label>年龄</label><input type="number" id="pAge" value="${u.age||''}" min="1" max="120"></div>
+      <div class="form-group"><label>手机号</label><input id="pPhone" value="${u.phone||''}"></div>
+      <div class="form-group"><label>邮箱</label><input id="pEmail" value="${u.email||''}"></div>
+      <p style="color:var(--text-light);font-size:0.85em">会员等级:${['普通','银卡','金卡','钻石'][u.membership_level]||'普通'} | 注册时间:${new Date(u.created_at).toLocaleString()}</p>
+      <button class="btn btn-primary mt-2" onclick="doSaveProfile()">保存修改</button></div>`;
+  } catch(e) { c.innerHTML = showAlert(e.message); }
+}
+
+async function doSaveProfile() {
+  const body = { real_name: document.getElementById('pRealName').value, phone: document.getElementById('pPhone').value, email: document.getElementById('pEmail').value };
+  const age = document.getElementById('pAge').value;
+  if (age) body.age = Number(age);
+  try {
+    await api('/user/profile', { method:'PUT', body:JSON.stringify(body) });
+    document.getElementById('pAlert').innerHTML = showAlert('保存成功','success');
+  } catch(e) { document.getElementById('pAlert').innerHTML = showAlert(e.message); }
+}
+
+async function profileAddresses() {
+  const c = document.getElementById('profileContent');
+  try {
+    const data = await api('/user/addresses');
+    const list = data.data.list;
+    let html = `<button class="btn btn-primary mb-2" onclick="showAddAddress()">+ 新增地址</button>`;
+    html += (list||[]).length ? list.map(a => `<div class="card" style="margin:8px 0">
+      <div class="flex flex-between"><strong>${a.receiver_name}</strong> <span>${a.phone}</span></div>
+      <p style="color:var(--text-light)">${a.province}${a.city}${a.district} ${a.detail} ${a.is_default?'<span class="tag tag-otc">默认</span>':''}</p>
+      <div class="flex gap-sm mt-1">${a.is_default?'':`<button class="btn btn-sm" onclick="setDefaultAddr(${a.address_id})">设为默认</button>`}<button class="btn btn-sm btn-danger" onclick="deleteAddr(${a.address_id})">删除</button></div></div>`).join('') : '<div class="card text-center">暂无收货地址</div>';
+    c.innerHTML = html;
+  } catch(e) { c.innerHTML = showAlert(e.message); }
+}
+
+function showAddAddress() {
+  document.getElementById('profileContent').insertAdjacentHTML('afterbegin', `<div class="modal-overlay"><div class="modal"><h4>新增地址</h4><div id="addrAlert"></div>
+    <div class="form-group"><label>收货人姓名</label><input id="addrName"></div>
+    <div class="form-group"><label>手机号</label><input id="addrPhone"></div>
+    <div class="form-group flex gap-sm"><div style="flex:1"><label>省</label><input id="addrProv"></div><div style="flex:1"><label>市</label><input id="addrCity"></div><div style="flex:1"><label>区</label><input id="addrDist"></div></div>
+    <div class="form-group"><label>详细地址</label><input id="addrDetail"></div>
+    <div class="form-group"><label><input type="checkbox" id="addrDefault"> 设为默认地址</label></div>
+    <div class="flex gap-sm"><button class="btn btn-primary" onclick="doAddAddress()">保存</button><button class="btn" onclick="this.closest('.modal-overlay').remove()">取消</button></div></div></div>`);
+}
+
+async function doAddAddress() {
+  try {
+    await api('/user/addresses', { method:'POST', body:JSON.stringify({
+      receiver_name:document.getElementById('addrName').value, phone:document.getElementById('addrPhone').value,
+      province:document.getElementById('addrProv').value, city:document.getElementById('addrCity').value,
+      district:document.getElementById('addrDist').value, detail:document.getElementById('addrDetail').value,
+      is_default:document.getElementById('addrDefault').checked?1:0
+    })});
+    document.querySelector('.modal-overlay')?.remove();
+    profileAddresses();
+  } catch(e) { document.getElementById('addrAlert').innerHTML = showAlert(e.message); }
+}
+
+async function setDefaultAddr(id) { try { await api('/user/addresses/'+id+'/default', { method:'PATCH' }); profileAddresses(); } catch(e) { alert(e.message); } }
+async function deleteAddr(id) { if (!confirm('确认删除此地址？')) return; try { await api('/user/addresses/'+id, { method:'DELETE' }); profileAddresses(); } catch(e) { alert(e.message); } }
+
+async function delivery(mc) {
+  mc.innerHTML = '<h3 style="margin:16px 0">配送中心</h3><div id="deliveryContent">加载中...</div>';
+  try {
+    const data = await api('/delivery/pending');
+    document.getElementById('deliveryContent').innerHTML = (data.data.list||[]).length ? data.data.list.map(d=>`<div class="card">
+      <p><strong>订单: ${d.order_no}</strong> | 地址: ${d.address} | 收货人: ${d.receiver_name} ${d.phone}</p>
+      <div class="flex gap-sm mt-1"><button class="btn btn-primary btn-sm" onclick="acceptDelivery(${d.delivery_id})">接单</button></div></div>`).join('') : '<div class="card text-center">暂无待接单任务</div>';
+  } catch(e) { document.getElementById('deliveryContent').innerHTML = showAlert(e.message); }
+}
+async function acceptDelivery(id) {
+  if (!confirm('确认接单？')) return;
+  try { await api('/delivery/'+id+'/accept', { method:'PATCH' });
+    const status = prompt('接单成功！更新配送状态:\n2-开始配送\n3-确认送达','2');
+    if (status==='2'||status==='3') { await api('/delivery/'+id+'/status', { method:'PATCH', body:JSON.stringify({delivery_status:Number(status)}) }); }
+    showPage('delivery');
+  } catch(e) { alert(e.message); }
+}
+
+// Init
+renderNav();
+showPage('home');
+</script>
+</body>
+</html>
