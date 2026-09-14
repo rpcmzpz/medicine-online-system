@@ -7,10 +7,32 @@ spring:
     username: root
     password: 1234
     driver-class-name: com.mysql.cj.jdbc.Driver
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 2000ms
+    lettuce:
+      pool:
+        max-active: 16
+        max-idle: 8
+        min-idle: 2
+        max-wait: 1000ms
   servlet:
     multipart:
       max-file-size: 10MB
       max-request-size: 50MB
+
+medicine:
+  cache:
+    # 缓存总开关：做「无缓存 vs 有缓存」压测对比时置为 false 即可退化为直查 DB
+    enabled: true
+    # 药品详情缓存基础 TTL（秒）
+    detail-ttl-seconds: 1800
+    # TTL 随机抖动上限（秒），防止大批 key 同时失效（缓存雪崩）
+    jitter-seconds: 300
+    # 「药品不存在」空值标记的 TTL（秒），防止恶意 id 打穿 DB（缓存穿透）
+    null-ttl-seconds: 120
 
 mybatis-plus:
   configuration:

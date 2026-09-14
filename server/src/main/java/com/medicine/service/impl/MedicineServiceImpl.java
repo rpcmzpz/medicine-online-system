@@ -1,11 +1,15 @@
 package com.medicine.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.medicine.cache.MedicineCache;
 import com.medicine.common.BusinessException;
 import com.medicine.common.Result;
 import com.medicine.entity.Category;
+import com.medicine.entity.Inventory;
 import com.medicine.entity.Medicine;
 import com.medicine.entity.Review;
 import com.medicine.mapper.CategoryMapper;
+import com.medicine.mapper.InventoryMapper;
 import com.medicine.mapper.MedicineMapper;
 import com.medicine.mapper.ReviewMapper;
 import com.medicine.service.MedicineService;
@@ -26,6 +30,12 @@ public class MedicineServiceImpl implements MedicineService {
 
     @Autowired
     private ReviewMapper reviewMapper;
+
+    @Autowired
+    private InventoryMapper inventoryMapper;
+
+    @Autowired
+    private MedicineCache medicineCache;
 
     @Override
     public Result list(Map<String, Object> params) {
@@ -86,9 +96,25 @@ public class MedicineServiceImpl implements MedicineService {
 
     @Override
     public Result detail(Long medicineId) {
+        // Cache Aside：命中缓存直接返回；未命中由 MedicineCache 保证只有一个线程回源（防击穿），
+        // 查不到则写空值标记（防穿透），TTL 带随机抖动（防雪崩）。
+        Map<String, Object> data = medicineCache.getOrLoad(medicineId, () -> buildCachedDetail(medicineId));
+        if (data == null) {
+            throw new BusinessException("药品不存在", 40400, 404);
+        }
+        // 库存随时在下单/支付/取消中变化，刻意不写进缓存，读取时实时回源（单条主键查询）
+        data.put("stock_quantity", loadStockQuantity(medicineId));
+        return Result.success(data);
+    }
+
+    /**
+     * 回源组装可缓存的详情数据。
+     * 返回 null 表示药品确实不存在，由缓存层写成空值标记。
+     */
+    private Map<String, Object> buildCachedDetail(Long medicineId) {
         Medicine medicine = medicineMapper.selectDetailById(medicineId);
         if (medicine == null) {
-            throw new BusinessException("药品不存在", 40400, 404);
+            return null;
         }
 
         List<Review> reviews = reviewMapper.selectByMedicineId(medicineId);
@@ -106,7 +132,6 @@ public class MedicineServiceImpl implements MedicineService {
         data.put("description", medicine.getDescription());
         data.put("price", medicine.getPrice());
         data.put("original_price", medicine.getOriginalPrice());
-        data.put("stock_quantity", medicine.getStockQuantity());
 
         Map<String, Object> categoryMap = new LinkedHashMap<>();
         categoryMap.put("category_id", medicine.getCategoryId());
@@ -130,7 +155,14 @@ public class MedicineServiceImpl implements MedicineService {
             data.put("avg_rating", null);
         }
 
-        return Result.success(data);
+        return data;
+    }
+
+    /** 实时读取药品总库存（不走缓存） */
+    private Integer loadStockQuantity(Long medicineId) {
+        Inventory inventory = inventoryMapper.selectOne(
+                new QueryWrapper<Inventory>().eq("medicine_id", medicineId));
+        return inventory == null || inventory.getStockQuantity() == null ? 0 : inventory.getStockQuantity();
     }
 
     @Override

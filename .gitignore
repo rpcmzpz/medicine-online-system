@@ -1,3 +1,15 @@
 *.log
 .DS_Store
 .vscode/
+.idea/
+*.iml
+
+# build output
+target/
+*/target/
+!**/target/.gitkeep
+
+# local runtime
+redis/
+*.rdb
+dump.rdb

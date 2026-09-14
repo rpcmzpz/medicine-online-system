@@ -1,6 +1,7 @@
 package com.medicine.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.medicine.cache.StockCache;
 import com.medicine.common.BusinessException;
 import com.medicine.common.Result;
 import com.medicine.entity.*;
@@ -34,6 +35,8 @@ public class OrderServiceImpl implements OrderService {
     private DeliveryMapper deliveryMapper;
     @Autowired
     private PrescriptionMapper prescriptionMapper;
+    @Autowired
+    private StockCache stockCache;
 
     private static final String[] ORDER_STATUS_LABELS = {"待支付", "待审核", "待配药", "待配送", "配送中", "已完成", "已取消", "已退款"};
 
@@ -62,81 +65,101 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("购物车商品不存在或已下架", 40001);
         }
 
-        // 库存校验 + 锁定
+        // 库存校验 + 锁定：Redis 预减挡并发，MySQL 乐观锁兜底
         BigDecimal totalAmount = BigDecimal.ZERO;
         boolean hasPrescription = false;
-        for (CartItem item : cartItems) {
-            Inventory inventory = inventoryMapper.selectOne(
-                    new QueryWrapper<Inventory>().eq("medicine_id", item.getMedicineId()));
-            if (inventory == null) {
-                throw new BusinessException("药品库存信息不存在: " + item.getMedicineId(), 40002);
+        // 记录已预减成功的条目：后续任何一步失败都要把 Redis 上扣掉的量补回去
+        List<CartItem> preDeducted = new ArrayList<>();
+        try {
+            for (CartItem item : cartItems) {
+                // ① Redis 原子预减（Lua 一次执行「查-判-减」）。
+                //    返回 false 说明 Redis 上可售库存已不足，直接快速失败，不再压数据库；
+                //    未预热或 Redis 故障时返回 true，自动降级为纯 DB 校验，不影响下单可用性。
+                if (!stockCache.tryPreDeduct(item.getMedicineId(), item.getQuantity())) {
+                    throw new BusinessException("药品库存不足: " + item.getMedicineId(), 40002);
+                }
+                preDeducted.add(item);
+
+                // ② DB 复核并锁定（真值仍在 MySQL，乐观锁保证最终不超卖）
+                Inventory inventory = inventoryMapper.selectOne(
+                        new QueryWrapper<Inventory>().eq("medicine_id", item.getMedicineId()));
+                if (inventory == null) {
+                    throw new BusinessException("药品库存信息不存在: " + item.getMedicineId(), 40002);
+                }
+                int available = inventory.getStockQuantity() - inventory.getLockedQuantity();
+                if (available < item.getQuantity()) {
+                    throw new BusinessException("药品库存不足: " + item.getMedicineId(), 40002);
+                }
+                inventoryMapper.lockStock(item.getMedicineId(), item.getQuantity());
+                totalAmount = totalAmount.add(item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
+                if (item.getDrugType() != null && item.getDrugType() == 1) {
+                    hasPrescription = true;
+                }
             }
-            int available = inventory.getStockQuantity() - inventory.getLockedQuantity();
-            if (available < item.getQuantity()) {
-                throw new BusinessException("药品库存不足: " + item.getMedicineId(), 40002);
+
+            // 生成订单编号
+            String orderNo = "MED" + Long.toString(System.currentTimeMillis(), 36).toUpperCase()
+                    + randomHex(4).toUpperCase();
+
+            Order order = new Order();
+            order.setOrderNo(orderNo);
+            order.setUserId(userId);
+            order.setAddressId(addressId);
+            order.setTotalAmount(totalAmount);
+            order.setDiscountAmount(BigDecimal.ZERO);
+            order.setActualAmount(totalAmount);
+            order.setOrderStatus(hasPrescription ? 1 : 0);
+            order.setHasPrescription(hasPrescription ? 1 : 0);
+            order.setRemark(remark);
+            order.setVersion(0);
+            orderMapper.insert(order);
+
+            // 写入订单明细
+            for (CartItem item : cartItems) {
+                OrderItem orderItem = new OrderItem();
+                orderItem.setOrderId(order.getOrderId());
+                orderItem.setMedicineId(item.getMedicineId());
+                orderItem.setMedicineName(item.getMedicineName());
+                orderItem.setPrice(item.getPrice());
+                orderItem.setQuantity(item.getQuantity());
+                orderItem.setSubtotal(item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
+                orderItemMapper.insert(orderItem);
             }
-            inventoryMapper.lockStock(item.getMedicineId(), item.getQuantity());
-            totalAmount = totalAmount.add(item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
-            if (item.getDrugType() != null && item.getDrugType() == 1) {
-                hasPrescription = true;
+
+            // 清空购物车已下单商品
+            cartItemMapper.delete(
+                    new QueryWrapper<CartItem>().in("cart_id", cartItemIdList).eq("user_id", userId));
+
+            // 处方药订单关联处方
+            @SuppressWarnings("unchecked")
+            List<Integer> prescriptionIdList = (List<Integer>) params.get("prescription_ids");
+            if (hasPrescription && prescriptionIdList != null && !prescriptionIdList.isEmpty()) {
+                for (Integer pid : prescriptionIdList) {
+                    Prescription prescription = new Prescription();
+                    prescription.setPrescriptionId(Long.valueOf(pid));
+                    prescription.setOrderId(order.getOrderId());
+                    prescriptionMapper.updateById(prescription);
+                }
             }
+
+            // 组装响应
+            Map<String, Object> result = new HashMap<>();
+            result.put("order_id", order.getOrderId());
+            result.put("order_no", order.getOrderNo());
+            result.put("total_amount", order.getTotalAmount());
+            result.put("actual_amount", order.getActualAmount());
+            result.put("order_status", order.getOrderStatus());
+            result.put("has_prescription", order.getHasPrescription());
+            result.put("items", cartItems.size());
+            return Result.created(result, "订单创建成功");
+        } catch (RuntimeException e) {
+            // @Transactional 只回滚数据库；Redis 不是事务资源，预减必须在这里显式补偿，
+            // 否则一次失败的下单会让可售库存凭空减少（少卖）。
+            for (CartItem item : preDeducted) {
+                stockCache.rollback(item.getMedicineId(), item.getQuantity());
+            }
+            throw e;
         }
-
-        // 生成订单编号
-        String orderNo = "MED" + Long.toString(System.currentTimeMillis(), 36).toUpperCase()
-                + randomHex(4).toUpperCase();
-
-        Order order = new Order();
-        order.setOrderNo(orderNo);
-        order.setUserId(userId);
-        order.setAddressId(addressId);
-        order.setTotalAmount(totalAmount);
-        order.setDiscountAmount(BigDecimal.ZERO);
-        order.setActualAmount(totalAmount);
-        order.setOrderStatus(hasPrescription ? 1 : 0);
-        order.setHasPrescription(hasPrescription ? 1 : 0);
-        order.setRemark(remark);
-        order.setVersion(0);
-        orderMapper.insert(order);
-
-        // 写入订单明细
-        for (CartItem item : cartItems) {
-            OrderItem orderItem = new OrderItem();
-            orderItem.setOrderId(order.getOrderId());
-            orderItem.setMedicineId(item.getMedicineId());
-            orderItem.setMedicineName(item.getMedicineName());
-            orderItem.setPrice(item.getPrice());
-            orderItem.setQuantity(item.getQuantity());
-            orderItem.setSubtotal(item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
-            orderItemMapper.insert(orderItem);
-        }
-
-        // 清空购物车已下单商品
-        cartItemMapper.delete(
-                new QueryWrapper<CartItem>().in("cart_id", cartItemIdList).eq("user_id", userId));
-
-        // 处方药订单关联处方
-        @SuppressWarnings("unchecked")
-        List<Integer> prescriptionIdList = (List<Integer>) params.get("prescription_ids");
-        if (hasPrescription && prescriptionIdList != null && !prescriptionIdList.isEmpty()) {
-            for (Integer pid : prescriptionIdList) {
-                Prescription prescription = new Prescription();
-                prescription.setPrescriptionId(Long.valueOf(pid));
-                prescription.setOrderId(order.getOrderId());
-                prescriptionMapper.updateById(prescription);
-            }
-        }
-
-        // 组装响应
-        Map<String, Object> result = new HashMap<>();
-        result.put("order_id", order.getOrderId());
-        result.put("order_no", order.getOrderNo());
-        result.put("total_amount", order.getTotalAmount());
-        result.put("actual_amount", order.getActualAmount());
-        result.put("order_status", order.getOrderStatus());
-        result.put("has_prescription", order.getHasPrescription());
-        result.put("items", cartItems.size());
-        return Result.created(result, "订单创建成功");
     }
 
     @Override
@@ -265,6 +288,8 @@ public class OrderServiceImpl implements OrderService {
         List<OrderItem> items = orderItemMapper.selectByOrderId(orderId);
         for (OrderItem item : items) {
             inventoryMapper.unlockStock(item.getMedicineId(), item.getQuantity());
+            // DB 解锁的同时归还 Redis 预减量，保证两边「可售库存」始终一致
+            stockCache.rollback(item.getMedicineId(), item.getQuantity());
         }
         return Result.success(null, "订单已取消");
     }
@@ -300,7 +325,7 @@ public class OrderServiceImpl implements OrderService {
         payment.setPaymentStatus(1);
         paymentMapper.insert(payment);
 
-        // 扣减库存
+        // 扣减库存：总库存和锁定库存同减，可售量不变，所以 Redis 预减计数这里不需要再动
         List<OrderItem> items = orderItemMapper.selectByOrderId(orderId);
         for (OrderItem item : items) {
             inventoryMapper.deductStock(item.getMedicineId(), item.getQuantity());

@@ -1,6 +1,8 @@
 package com.medicine.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.medicine.cache.MedicineCache;
+import com.medicine.cache.StockCache;
 import com.medicine.common.BusinessException;
 import com.medicine.entity.Inventory;
 import com.medicine.entity.Medicine;
@@ -24,6 +26,12 @@ public class AdminMedicineServiceImpl implements AdminMedicineService {
 
     @Autowired
     private InventoryMapper inventoryMapper;
+
+    @Autowired
+    private MedicineCache medicineCache;
+
+    @Autowired
+    private StockCache stockCache;
 
     @Override
     public Map<String, Object> list(Map<String, Object> params) {
@@ -101,6 +109,8 @@ public class AdminMedicineServiceImpl implements AdminMedicineService {
             inventory.setAlertThreshold(alertThreshold);
             inventory.setLockedQuantity(0);
             inventoryMapper.insert(inventory);
+            // 新药品没有锁定库存，可售量就是库存量
+            stockCache.sync(medicine.getMedicineId(), stockQuantity);
         }
 
         Map<String, Object> result = new HashMap<>();
@@ -131,6 +141,10 @@ public class AdminMedicineServiceImpl implements AdminMedicineService {
         if (params.get("original_price") != null) updateMedicine.setOriginalPrice(new BigDecimal(params.get("original_price").toString()));
 
         medicineMapper.updateById(updateMedicine);
+
+        // 缓存一致性：先更库、再删缓存（不是更新缓存），并延迟双删兜住「删缓存后并发读把旧值写回」
+        medicineCache.evict(medicineId);
+        medicineCache.evictDelayed(medicineId);
     }
 
     @Override
@@ -144,6 +158,10 @@ public class AdminMedicineServiceImpl implements AdminMedicineService {
         updateMedicine.setMedicineId(medicineId);
         updateMedicine.setStatus(status);
         medicineMapper.updateById(updateMedicine);
+
+        // 上下架会改变详情内容，同样要清缓存
+        medicineCache.evict(medicineId);
+        medicineCache.evictDelayed(medicineId);
     }
 
     @Override
@@ -166,5 +184,9 @@ public class AdminMedicineServiceImpl implements AdminMedicineService {
             }
             inventoryMapper.updateById(inventory);
         }
+
+        // 管理员改的是总库存，Redis 里存的是可售量（总库存 - 已锁定），必须按 DB 重新对齐
+        int locked = inventory.getLockedQuantity() == null ? 0 : inventory.getLockedQuantity();
+        stockCache.sync(medicineId, stockQuantity - locked);
     }
 }

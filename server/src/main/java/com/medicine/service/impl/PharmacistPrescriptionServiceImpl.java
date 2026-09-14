@@ -1,6 +1,7 @@
 package com.medicine.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.medicine.cache.StockCache;
 import com.medicine.common.BusinessException;
 import com.medicine.entity.Order;
 import com.medicine.entity.OrderItem;
@@ -35,6 +36,9 @@ public class PharmacistPrescriptionServiceImpl implements PharmacistPrescription
 
     @Autowired
     private InventoryMapper inventoryMapper;
+
+    @Autowired
+    private StockCache stockCache;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -90,6 +94,8 @@ public class PharmacistPrescriptionServiceImpl implements PharmacistPrescription
                 if (items != null) {
                     for (OrderItem item : items) {
                         inventoryMapper.unlockStock(item.getMedicineId(), item.getQuantity());
+                        // 处方被驳回等同于订单作废：DB 解锁的同时归还 Redis 预减量
+                        stockCache.rollback(item.getMedicineId(), item.getQuantity());
                     }
                 }
 

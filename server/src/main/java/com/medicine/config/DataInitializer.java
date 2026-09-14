@@ -11,12 +11,15 @@ import com.medicine.mapper.ReviewMapper;
 import com.medicine.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 
 @Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public class DataInitializer implements CommandLineRunner {
 
     @Autowired
