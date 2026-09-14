@@ -7,6 +7,7 @@ import com.medicine.common.Result;
 import com.medicine.entity.*;
 import com.medicine.mapper.*;
 import com.medicine.service.OrderService;
+import com.medicine.stock.InventoryStockManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,7 +29,7 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private AddressMapper addressMapper;
     @Autowired
-    private InventoryMapper inventoryMapper;
+    private InventoryStockManager inventoryStockManager;
     @Autowired
     private PaymentMapper paymentMapper;
     @Autowired
@@ -80,17 +81,11 @@ public class OrderServiceImpl implements OrderService {
                 }
                 preDeducted.add(item);
 
-                // ② DB 复核并锁定（真值仍在 MySQL，乐观锁保证最终不超卖）
-                Inventory inventory = inventoryMapper.selectOne(
-                        new QueryWrapper<Inventory>().eq("medicine_id", item.getMedicineId()));
-                if (inventory == null) {
-                    throw new BusinessException("药品库存信息不存在: " + item.getMedicineId(), 40002);
-                }
-                int available = inventory.getStockQuantity() - inventory.getLockedQuantity();
-                if (available < item.getQuantity()) {
+                // ② DB 复核并锁定：真值仍在 MySQL，用 version 乐观锁做 CAS 更新，
+                //    SQL 的 WHERE 里同时带「可售量足够」，即使上面的预减被并发穿透也不会超卖。
+                if (!inventoryStockManager.lock(item.getMedicineId(), item.getQuantity())) {
                     throw new BusinessException("药品库存不足: " + item.getMedicineId(), 40002);
                 }
-                inventoryMapper.lockStock(item.getMedicineId(), item.getQuantity());
                 totalAmount = totalAmount.add(item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
                 if (item.getDrugType() != null && item.getDrugType() == 1) {
                     hasPrescription = true;
@@ -287,7 +282,7 @@ public class OrderServiceImpl implements OrderService {
 
         List<OrderItem> items = orderItemMapper.selectByOrderId(orderId);
         for (OrderItem item : items) {
-            inventoryMapper.unlockStock(item.getMedicineId(), item.getQuantity());
+            inventoryStockManager.unlock(item.getMedicineId(), item.getQuantity());
             // DB 解锁的同时归还 Redis 预减量，保证两边「可售库存」始终一致
             stockCache.rollback(item.getMedicineId(), item.getQuantity());
         }
@@ -328,7 +323,7 @@ public class OrderServiceImpl implements OrderService {
         // 扣减库存：总库存和锁定库存同减，可售量不变，所以 Redis 预减计数这里不需要再动
         List<OrderItem> items = orderItemMapper.selectByOrderId(orderId);
         for (OrderItem item : items) {
-            inventoryMapper.deductStock(item.getMedicineId(), item.getQuantity());
+            inventoryStockManager.deduct(item.getMedicineId(), item.getQuantity());
         }
 
         Map<String, Object> result = new HashMap<>();

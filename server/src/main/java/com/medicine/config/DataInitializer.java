@@ -138,6 +138,7 @@ public class DataInitializer implements CommandLineRunner {
             inv.setStockQuantity(stock);
             inv.setAlertThreshold(alert);
             inv.setLockedQuantity(0);
+            inv.setVersion(0);
             inventoryMapper.insert(inv);
         }
     }

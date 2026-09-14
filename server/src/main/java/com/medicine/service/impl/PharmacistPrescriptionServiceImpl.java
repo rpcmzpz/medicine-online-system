@@ -6,11 +6,11 @@ import com.medicine.common.BusinessException;
 import com.medicine.entity.Order;
 import com.medicine.entity.OrderItem;
 import com.medicine.entity.Prescription;
-import com.medicine.mapper.InventoryMapper;
 import com.medicine.mapper.OrderItemMapper;
 import com.medicine.mapper.OrderMapper;
 import com.medicine.mapper.PrescriptionMapper;
 import com.medicine.service.PharmacistPrescriptionService;
+import com.medicine.stock.InventoryStockManager;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,7 +35,7 @@ public class PharmacistPrescriptionServiceImpl implements PharmacistPrescription
     private OrderItemMapper orderItemMapper;
 
     @Autowired
-    private InventoryMapper inventoryMapper;
+    private InventoryStockManager inventoryStockManager;
 
     @Autowired
     private StockCache stockCache;
@@ -93,7 +93,7 @@ public class PharmacistPrescriptionServiceImpl implements PharmacistPrescription
 
                 if (items != null) {
                     for (OrderItem item : items) {
-                        inventoryMapper.unlockStock(item.getMedicineId(), item.getQuantity());
+                        inventoryStockManager.unlock(item.getMedicineId(), item.getQuantity());
                         // 处方被驳回等同于订单作废：DB 解锁的同时归还 Redis 预减量
                         stockCache.rollback(item.getMedicineId(), item.getQuantity());
                     }

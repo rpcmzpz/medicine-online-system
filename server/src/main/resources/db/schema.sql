@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS inventory (
   stock_quantity INT NOT NULL DEFAULT 0,
   alert_threshold INT DEFAULT 10,
   locked_quantity INT DEFAULT 0,
+  version INT NOT NULL DEFAULT 0 COMMENT '乐观锁：库存 CAS 更新的版本号',
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (medicine_id) REFERENCES medicines(medicine_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

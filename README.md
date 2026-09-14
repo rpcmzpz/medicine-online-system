@@ -79,25 +79,62 @@
 库存（`stock_quantity`）随时在下单/支付/取消中变化，**不写进缓存**，详情接口读取时实时回源（单条主键查询）。
 评价列表在当前版本没有写入接口，所以可以一起缓存；如果后续开放用户评价，需要在评价写入时同步删除详情缓存。
 
-### 4. 库存：Redis 拦并发，MySQL 保正确
+### 4. 库存：Redis 拦并发，MySQL 用乐观锁保正确
 
 ```
-下单 → Redis Lua 原子预减(可售库存)  →  通过  → MySQL 复核 + lockStock 锁定
-                    ↓ 不足                              ↓ 失败
-              直接快速失败，不打 DB              stockCache.rollback() 归还预减量
+下单 → Redis Lua 原子预减(可售库存) → 通过 → MySQL 乐观锁 CAS 锁定
+                  ↓ 不足                          ↓ 失败
+            直接快速失败，不打 DB          stockCache.rollback() 归还预减量
 ```
 
 - MySQL 始终是库存真值，`乐观锁 version + lock/deduct/unlock 三段式` 保证**最终不超卖**；
 - Redis 计数只是挡在 DB 前面的第一道闸门，把明知不足的并发请求快速失败掉；
 - 两者是「拦截 + 兜底」的组合，不是二选一。
 
+#### 4.1 乐观锁怎么落在 SQL 上
+
+`inventory` 表带 `version` 列，三条写操作全部是 CAS（比较并交换）：
+
+```sql
+-- 锁定：版本号匹配才生效，且 WHERE 里直接带可售量判断
+UPDATE inventory SET version = version + 1, locked_quantity = locked_quantity + #{qty}
+WHERE medicine_id = ? AND version = ? AND stock_quantity - locked_quantity >= #{qty}
+```
+
+影响行数为 0 只有两种可能：**版本被别的请求改过**，或者**可售量已经不够**。
+前者交给上层重读重试，后者直接判定「库存不足」返回。
+
+`version` 不只是形式上的乐观锁标记：把「可售量足够」一并写进 `WHERE`，
+等于让 MySQL 的行级原子更新成为最后一道屏障——即使 Redis 预减因为故障被绕过，
+数据库这一层也不会放过超卖。
+
+#### 4.2 一个必须避开的坑：重试不能继续用快照读
+
+MySQL 默认可重复读（RR）下，**同一事务内的普通查询走的是事务开始时的快照**。
+如果 CAS 失败后还用普通 `select` 重读版本号，拿到的仍是旧 `version`，
+会一直 CAS 失败直到耗尽重试次数——乐观锁就退化成了「必然失败」。
+
+所以 `InventoryStockManager` 的重试策略是：**第 1 次乐观读，之后改当前读**。
+
+```java
+return attempt == 1
+        ? inventoryMapper.selectVersion(medicineId)            // 普通快照读
+        : inventoryMapper.selectVersionForUpdate(medicineId);  // SELECT ... FOR UPDATE 当前读
+```
+
+`FOR UPDATE` 能读到别人已提交的最新 `version`，同时把该行锁到本事务结束，
+后续重试必然收敛。正常路径（无冲突）**一次加锁都不会发生**，
+冲突才付出一次重读代价——这正是乐观锁相对悲观锁的意义。
+
+#### 4.3 计数含义与各环节对齐
+
 计数含义是**可售库存**（`stock_quantity - locked_quantity`），所以各环节增减必须对齐：
 
 | 场景 | DB 操作 | Redis 计数 |
 |------|---------|-----------|
-| 下单 | `lockStock`（锁定 +qty） | `decrby qty` |
-| 支付 | `deductStock`（总量、锁定量同减） | 不动（可售量不变） |
-| 取消订单 / 处方驳回 | `unlockStock` | `incrby qty` |
+| 下单 | `lockStock`（版本 CAS，锁定 +qty） | `decrby qty` |
+| 支付 | `deductStock`（版本 CAS，总量、锁定量同减） | 不动（可售量不变） |
+| 取消订单 / 处方驳回 | `unlockStock`（版本 CAS） | `incrby qty` |
 | 管理员改库存 / 启动预热 | `update` | 按 DB 重置 |
 
 两个容易踩的点，脚本里都处理了：
@@ -108,6 +145,9 @@
 
 启动时 `StockCacheWarmer` 会把 DB 的可售库存预热进 Redis，并**以 DB 为准覆盖写**，
 避免 Redis 里残留上一次运行的旧计数与 DB 漂移。
+
+> **升级已有数据库**：`version` 列是后加的，若你的库是早期版本，需要执行
+> `server/src/main/resources/db/upgrade_inventory_version.sql`（幂等，重复执行安全）。
 
 ### 5. 降级策略
 
@@ -140,6 +180,8 @@ server/
 │   │   ├── JwtUtil.java                 # Token 生成/解析/刷新
 │   │   ├── JwtInterceptor.java          # 登录认证拦截
 │   │   └── RoleInterceptor.java         # 角色权限拦截（admin/pharmacist）
+│   ├── stock/
+│   │   └── InventoryStockManager.java   # 库存乐观锁唯一入口：CAS 锁定/解锁/扣减 + 有限重试
 │   ├── entity/                          # 14 个实体类（普通 POJO，手写 getter/setter）
 │   ├── mapper/                          # 14 个 Mapper 接口（MyBatis-Plus + 手写 SQL）
 │   ├── service/                         # Service 层
@@ -206,6 +248,13 @@ redis-cli get stock:med:1                               # 启动预热后的可�
 
 # 4) 命中率
 redis-cli info stats | grep keyspace
+
+# 5) 库存并发正确性 + 乐观锁（属集成测试，默认不跑，需本机 MySQL）
+cd server && mvn test -DexcludedGroups=
+# 预期输出：
+#   [it] 乐观锁验证：version=N 首次 CAS 影响行数=1，旧 version 再次 CAS 影响行数=0
+#   [it] 并发抢库存：线程=40 单量=20 可售=500 → 成功=25 判定不足=15 异常=0
+#   [it] 锁定增量=500，剩余可售=0        ← 25 单 × 20 件恰好等于可售量，无一超卖
 ```
 
 性能对比（做压测时务必先造数据、提高并发，否则单机小并发下加缓存可能反而更慢，
@@ -249,8 +298,9 @@ redis-cli info stats | grep keyspace
 14 张表：users、addresses、categories、medicines、inventory、reviews、cart_items、orders、order_items、payments、prescriptions、deliveries、consultations、medication_reminders
 
 核心设计：
-- 库存三段式：下单 lockStock → 支付 deductStock → 取消 unlockStock，防止超卖
-- 订单乐观锁：version 字段，取消和确认收货用 `WHERE version=?` 防并发
+- 库存乐观锁三段式：`inventory.version` 做 CAS，下单 lockStock → 支付 deductStock → 取消 unlockStock，
+  影响行数为 0 即版本冲突或可售不足，由 `InventoryStockManager` 重读重试（第 2 次起用当前读），防止超卖
+- 订单乐观锁：`orders.version` 字段，取消和确认收货用 `WHERE version=?` 防并发
 - 处方药订单需药师审核通过后才进入配药环节
 - 树形分类：categories 表 parent_id 自引用，支持二级分类
 

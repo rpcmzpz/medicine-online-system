@@ -11,6 +11,8 @@ public class Inventory {
     private Integer stockQuantity;
     private Integer alertThreshold;
     private Integer lockedQuantity;
+    /** 乐观锁版本号：库存锁定/解锁/扣减均以 version 做 CAS 条件，冲突则重读重试 */
+    private Integer version;
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
 
@@ -52,6 +54,14 @@ public class Inventory {
 
     public void setLockedQuantity(Integer lockedQuantity) {
         this.lockedQuantity = lockedQuantity;
+    }
+
+    public Integer getVersion() {
+        return version;
+    }
+
+    public void setVersion(Integer version) {
+        this.version = version;
     }
 
     public LocalDateTime getUpdatedAt() {

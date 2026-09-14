@@ -6,6 +6,7 @@ import com.medicine.entity.Address;
 import com.medicine.entity.CartItem;
 import com.medicine.mapper.*;
 import com.medicine.service.impl.OrderServiceImpl;
+import com.medicine.stock.InventoryStockManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,6 +15,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -22,13 +24,15 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * 下单链路上「Redis 预减 + DB 兜底」的配合行为：
- * 预减判定不足要快速失败，DB 阶段失败要把预减量补偿回去。
+ * 下单链路上「Redis 预减 + DB 乐观锁」的配合行为：
+ * 预减判定不足要快速失败；一旦预减成功过，后续任何环节失败都必须把预减量补偿回去。
  */
 @ExtendWith(MockitoExtension.class)
 class OrderServiceImplTest {
@@ -44,8 +48,6 @@ class OrderServiceImplTest {
     @Mock
     private AddressMapper addressMapper;
     @Mock
-    private InventoryMapper inventoryMapper;
-    @Mock
     private PaymentMapper paymentMapper;
     @Mock
     private DeliveryMapper deliveryMapper;
@@ -53,6 +55,8 @@ class OrderServiceImplTest {
     private PrescriptionMapper prescriptionMapper;
     @Mock
     private StockCache stockCache;
+    @Mock
+    private InventoryStockManager inventoryStockManager;
 
     @InjectMocks
     private OrderServiceImpl orderService;
@@ -64,44 +68,45 @@ class OrderServiceImplTest {
         return params;
     }
 
-    private List<CartItem> cartItems() {
+    private CartItem cartItem(long medicineId, int quantity) {
         CartItem item = new CartItem();
-        item.setMedicineId(1L);
-        item.setQuantity(2);
+        item.setMedicineId(medicineId);
+        item.setQuantity(quantity);
         item.setPrice(new BigDecimal("18.50"));
         item.setMedicineName("布洛芬缓释胶囊");
         item.setDrugType(0);
-        return Collections.singletonList(item);
+        return item;
     }
 
-    private void stubCommon() {
+    private void stubCommon(List<CartItem> items) {
         when(addressMapper.selectOne(any())).thenReturn(new Address());
-        when(cartItemMapper.selectByIds(anyList(), eq(USER_ID))).thenReturn(cartItems());
+        when(cartItemMapper.selectByIds(anyList(), eq(USER_ID))).thenReturn(items);
     }
 
     @Test
-    @DisplayName("Redis 预减判定库存不足时快速失败：不落订单，也不产生补偿动作")
+    @DisplayName("Redis 预减判定库存不足时快速失败：不查库、不落单、不产生补偿动作")
     void create_redisSaysNotEnough_shouldFailFast() {
-        stubCommon();
+        stubCommon(Collections.singletonList(cartItem(1L, 2)));
         when(stockCache.tryPreDeduct(1L, 2)).thenReturn(false);
 
         BusinessException exception = assertThrows(BusinessException.class,
                 () -> orderService.create(params(), USER_ID));
 
         assertEquals(40002, exception.getCode());
-        // 连 DB 都不该查，更不该落单
-        verify(inventoryMapper, never()).selectOne(any());
+        // 预减就失败了，连 DB 都不该碰
+        verify(inventoryStockManager, never()).lock(anyLong(), anyInt());
         verify(orderMapper, never()).insert(any());
         verify(stockCache, never()).rollback(any(), anyInt());
     }
 
     @Test
-    @DisplayName("Redis 预减通过但 DB 校验失败时，必须把预减掉的库存归还")
+    @DisplayName("Redis 预减通过但 DB 阶段异常时，必须把预减掉的库存归还")
     void create_dbCheckFails_shouldRollbackRedis() {
-        stubCommon();
+        stubCommon(Collections.singletonList(cartItem(1L, 2)));
         when(stockCache.tryPreDeduct(1L, 2)).thenReturn(true);
-        // 库存记录缺失 → DB 阶段抛异常
-        when(inventoryMapper.selectOne(any())).thenReturn(null);
+        // 库存记录缺失 → 乐观锁管理器抛异常
+        when(inventoryStockManager.lock(1L, 2))
+                .thenThrow(new BusinessException("药品库存信息不存在: 1", 40002));
 
         assertThrows(BusinessException.class, () -> orderService.create(params(), USER_ID));
 
@@ -111,22 +116,36 @@ class OrderServiceImplTest {
     }
 
     @Test
-    @DisplayName("Redis 未预热（降级放行）时，库存不足由 DB 校验拦下")
+    @DisplayName("Redis 未预热（降级放行）时，可售不足由 DB 乐观锁拦下并归还预减量")
     void create_redisDegraded_shouldStillBeBlockedByDb() {
-        stubCommon();
+        stubCommon(Collections.singletonList(cartItem(1L, 2)));
         when(stockCache.tryPreDeduct(1L, 2)).thenReturn(true);
-
-        com.medicine.entity.Inventory inventory = new com.medicine.entity.Inventory();
-        inventory.setMedicineId(1L);
-        inventory.setStockQuantity(10);
-        inventory.setLockedQuantity(9);
-        when(inventoryMapper.selectOne(any())).thenReturn(inventory);
+        // DB 侧可售量不足 → lock 返回 false
+        when(inventoryStockManager.lock(1L, 2)).thenReturn(false);
 
         BusinessException exception = assertThrows(BusinessException.class,
                 () -> orderService.create(params(), USER_ID));
 
         assertEquals(40002, exception.getCode());
-        verify(inventoryMapper, never()).lockStock(any(), anyInt());
         verify(stockCache, times(1)).rollback(1L, 2);
+        verify(orderMapper, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("多商品下单中途失败：前面已预减的条目也要逐个归还")
+    void create_secondItemInsufficient_shouldRollbackAllPreDeducted() {
+        stubCommon(Arrays.asList(cartItem(1L, 2), cartItem(2L, 3)));
+        when(stockCache.tryPreDeduct(anyLong(), anyInt())).thenReturn(true);
+        when(inventoryStockManager.lock(1L, 2)).thenReturn(true);   // 第 1 件锁定成功
+        when(inventoryStockManager.lock(2L, 3)).thenReturn(false);  // 第 2 件不足
+
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> orderService.create(params(), USER_ID));
+
+        assertEquals(40002, exception.getCode());
+        // 两件都要归还：第 1 件虽锁定成功，但整个事务会回滚，Redis 上的预减只能手动补回
+        verify(stockCache, times(1)).rollback(1L, 2);
+        verify(stockCache, times(1)).rollback(2L, 3);
+        verify(orderMapper, never()).insert(any());
     }
 }
