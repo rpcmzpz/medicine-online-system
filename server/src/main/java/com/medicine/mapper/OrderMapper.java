@@ -15,6 +15,17 @@ public interface OrderMapper extends BaseMapper<Order> {
     @Update("UPDATE orders SET order_status = #{status}, version = version + 1 WHERE order_id = #{orderId} AND version = #{version}")
     int updateStatusOptimistic(@Param("orderId") Long orderId, @Param("status") int status, @Param("version") int version);
 
+    @Update("UPDATE orders SET order_status = #{status}, payment_method = #{paymentMethod}, paid_at = #{paidAt}, version = version + 1 WHERE order_id = #{orderId} AND version = #{version}")
+    int updatePayOptimistic(@Param("orderId") Long orderId, @Param("status") int status,
+                            @Param("paymentMethod") int paymentMethod,
+                            @Param("paidAt") java.time.LocalDateTime paidAt,
+                            @Param("version") int version);
+
+    @Update("UPDATE orders SET order_status = #{status}, completed_at = #{completedAt}, version = version + 1 WHERE order_id = #{orderId} AND version = #{version}")
+    int updateCompleteOptimistic(@Param("orderId") Long orderId, @Param("status") int status,
+                                 @Param("completedAt") java.time.LocalDateTime completedAt,
+                                 @Param("version") int version);
+
     @Select("SELECT SUM(actual_amount) as total_sales, COUNT(*) as total_orders, AVG(actual_amount) as avg_order_amount FROM orders WHERE order_status = 5")
     java.util.Map<String, Object> selectSalesSummary();
 

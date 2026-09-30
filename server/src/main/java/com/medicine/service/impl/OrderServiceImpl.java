@@ -305,11 +305,12 @@ public class OrderServiceImpl implements OrderService {
                 + randomHex(6).toUpperCase();
         int newStatus = (order.getHasPrescription() != null && order.getHasPrescription() == 1) ? 1 : 2;
 
-        // 更新订单状态
-        order.setOrderStatus(newStatus);
-        order.setPaymentMethod(paymentMethod);
-        order.setPaidAt(LocalDateTime.now());
-        orderMapper.updateById(order);
+        // 更新订单状态：带 version 条件，防止同一订单被并发支付两次
+        int affected = orderMapper.updatePayOptimistic(orderId, newStatus, paymentMethod,
+                LocalDateTime.now(), order.getVersion());
+        if (affected == 0) {
+            throw new BusinessException("订单状态已变更，请刷新后重试", 40003);
+        }
 
         // 写入支付记录
         Payment payment = new Payment();
@@ -344,9 +345,10 @@ public class OrderServiceImpl implements OrderService {
         if (order.getOrderStatus() != 3 && order.getOrderStatus() != 4) {
             throw new BusinessException("该订单状态不可确认收货", 40002);
         }
-        order.setOrderStatus(5);
-        order.setCompletedAt(LocalDateTime.now());
-        orderMapper.updateStatusOptimistic(orderId, 5, order.getVersion());
+        int affected = orderMapper.updateCompleteOptimistic(orderId, 5, LocalDateTime.now(), order.getVersion());
+        if (affected == 0) {
+            throw new BusinessException("订单状态已变更，请刷新后重试", 40003);
+        }
         return Result.success(null, "已确认收货");
     }
 

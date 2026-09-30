@@ -13,3 +13,4 @@ target/
 redis/
 *.rdb
 dump.rdb
+uploads/
