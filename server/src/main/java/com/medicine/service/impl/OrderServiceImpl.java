@@ -8,6 +8,7 @@ import com.medicine.entity.*;
 import com.medicine.mapper.*;
 import com.medicine.service.OrderService;
 import com.medicine.stock.InventoryStockManager;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +41,8 @@ public class OrderServiceImpl implements OrderService {
     private StockCache stockCache;
 
     private static final String[] ORDER_STATUS_LABELS = {"待支付", "待审核", "待配药", "待配送", "配送中", "已完成", "已取消", "已退款"};
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     @Transactional
@@ -103,7 +106,10 @@ public class OrderServiceImpl implements OrderService {
             order.setTotalAmount(totalAmount);
             order.setDiscountAmount(BigDecimal.ZERO);
             order.setActualAmount(totalAmount);
-            order.setOrderStatus(hasPrescription ? 1 : 0);
+            // 一律先「待支付」。处方单支付后由 pay() 决定进 1(待审核) 还是 2(待配药)：
+            // 原写法 hasPrescription ? 1 : 0 会让处方单跳过待支付，状态机从 1 出发、
+            // 支付后仍是 1，用户和药师都分不清这单到底付没付。
+            order.setOrderStatus(0);
             order.setHasPrescription(hasPrescription ? 1 : 0);
             order.setRemark(remark);
             order.setVersion(0);
@@ -260,7 +266,38 @@ public class OrderServiceImpl implements OrderService {
             result.put("delivery", null);
         }
 
+        // 处方信息：客户端要靠 review_status 显示「待审核/已通过/已驳回」，
+        // 驳回时还要把 review_remark 原样给用户看，所以这里必须一并返回。
+        List<Prescription> prescriptions = prescriptionMapper.selectList(
+                new QueryWrapper<Prescription>().eq("order_id", orderId));
+        result.put("prescriptions", prescriptions == null ? Collections.emptyList()
+                : prescriptions.stream().map(p -> {
+                    Map<String, Object> pMap = new HashMap<>();
+                    pMap.put("prescription_id", p.getPrescriptionId());
+                    pMap.put("review_status", p.getReviewStatus());
+                    pMap.put("review_remark", p.getReviewRemark());
+                    pMap.put("reviewed_at", p.getReviewedAt());
+                    pMap.put("image_urls", parseImageUrls(p.getImageUrls()));
+                    return pMap;
+                }).collect(Collectors.toList()));
+
         return Result.success(result);
+    }
+
+    /**
+     * prescriptions.image_urls 存的是 JSON 字符串（如 ["/uploads/a.jpg"]）。
+     * 直接丢给客户端会变成一个字符串字面量而不是数组，所以在这里解析成 List。
+     */
+    private List<String> parseImageUrls(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(raw,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (Exception e) {
+            return Collections.emptyList();
+        }
     }
 
     @Override
@@ -297,7 +334,9 @@ public class OrderServiceImpl implements OrderService {
         if (order == null) {
             throw new BusinessException("订单不存在", 40001);
         }
-        if (order.getOrderStatus() != 0 && order.getOrderStatus() != 1) {
+        // 只有「待支付」能付款。原实现还放行 1(待审核)，那是按「处方单创建即待审核」
+        // 的旧状态机写的；现在处方单也是先付款再进审核，再放行 1 就等于允许重复支付。
+        if (order.getOrderStatus() != 0) {
             throw new BusinessException("该订单状态不可支付", 40002);
         }
 

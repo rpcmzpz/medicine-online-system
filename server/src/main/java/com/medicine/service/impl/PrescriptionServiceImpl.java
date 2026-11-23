@@ -41,7 +41,11 @@ public class PrescriptionServiceImpl implements PrescriptionService {
 
         List<String> imageUrls = new ArrayList<>();
         try {
-            Path uploadDir = Paths.get(uploadPath);
+            // 必须转成绝对路径：MultipartFile.transferTo(File) 收到相对路径时，
+            // 是按 **Servlet 临时目录**（tomcat.3000.xxx/work/...）解析的，不是进程工作目录。
+            // 原来直接传 Paths.get("./uploads")，实际会去找 .../work/Tomcat/localhost/ROOT/uploads，
+            // 该目录不存在 → FileNotFoundException，上传接口从没成功过。
+            Path uploadDir = Paths.get(uploadPath).toAbsolutePath().normalize();
             if (!Files.exists(uploadDir)) {
                 Files.createDirectories(uploadDir);
             }
@@ -93,6 +97,11 @@ public class PrescriptionServiceImpl implements PrescriptionService {
                 new QueryWrapper<Prescription>().eq("prescription_id", prescriptionId));
         if (prescription == null) {
             throw new BusinessException("处方不存在", 40001);
+        }
+        // 越权校验：处方里有病情信息，不能只凭 id 就能查别人的。
+        // 原实现收了 userId 却完全没用，属于典型的水平越权（IDOR）。
+        if (!prescription.getUserId().equals(userId)) {
+            throw new BusinessException("无权查看该处方", 40301, 403);
         }
 
         List<String> imageUrls = new ArrayList<>();
