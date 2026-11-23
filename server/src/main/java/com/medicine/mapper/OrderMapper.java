@@ -6,7 +6,8 @@ import org.apache.ibatis.annotations.*;
 
 @Mapper
 public interface OrderMapper extends BaseMapper<Order> {
-    @Select("<script>SELECT o.*, u.username FROM orders o JOIN users u ON o.user_id = u.user_id WHERE 1=1 ${ew.customSqlSegment}</script>")
+    // customSqlSegment 自带 "WHERE ..."，前面不能再写 WHERE 1=1，否则会拼出两个 WHERE
+    @Select("<script>SELECT o.*, u.username FROM orders o JOIN users u ON o.user_id = u.user_id ${ew.customSqlSegment}</script>")
     java.util.List<Order> selectWithUser(@Param("ew") com.baomidou.mybatisplus.core.conditions.Wrapper<Order> wrapper);
 
     @Select("<script>SELECT COUNT(*) FROM orders o <where> ${ew.sqlSegment} </where></script>")
