@@ -20,8 +20,9 @@
 - 在线支付（微信/支付宝/银联）、订单状态跟踪（8 种状态）
 
 处方管理
-- 处方图片上传、药师审核（通过/驳回）
-- 审核结果影响订单流转
+- 处方图片上传（multipart 多文件，落盘 `./uploads`，经 `/uploads/**` 静态映射对外提供）
+- 药师审核（通过/驳回，带审核意见），驳回时联动取消订单并释放库存
+- 审核结果驱动订单状态流转（详见「处方与订单状态机」）
 
 配送管理
 - 配送员接单、配送状态更新、实时追踪
@@ -155,6 +156,44 @@ return attempt == 1
 获取重建锁失败 → 直查 DB；写缓存失败 → 只记日志不影响本次返回。
 Redis 挂掉时接口仍可用（会退化成无缓存版本），只是少了并发保护。
 
+## 处方与订单状态机
+
+### 1. 状态流转
+
+```
+下单 ──► 0 待支付 ──支付──► 无处方药 ──► 2 待配药
+                    │
+                    └──有处方药──► 1 待审核 ──通过──► 2 待配药
+                                      │
+                                      └──驳回──► 6 已取消（解锁库存）
+```
+
+关键约束：
+
+- **处方单创建时一律 `status = 0`**。早期实现直接写成 1（待审核），等于用户可以跳过付款直接进入药师审核。
+- **`pay` 接口只放行 `status = 0`**。此前同时放行 0 和 1，同一笔订单可以被重复支付，产生多条 `payments` 记录。
+- **药师待审列表只查「已支付且待审核」的处方**：`prescriptions` 在结算页上传时就已经落库，
+  如果只按 `review_status = 0` 查询，药师会审到尚未付款的单据，审核通过后订单直接跳到待配药。
+
+### 2. 处方图片的两个必踩坑
+
+**上传目录必须是绝对路径。** `MultipartFile.transferTo(File)` 收到相对路径 `./uploads` 时，
+是按 **Servlet 临时目录**（`tomcat.3000.xxxx/work/...`）解析的，不是进程工作目录，必然抛
+`FileNotFoundException`。必须先 `Paths.get(path).toAbsolutePath()`。
+
+**上传目录不在 classpath 里。** Spring Boot 默认只暴露 `classpath:/static`，所以数据库里存的
+`/uploads/xxx.png` 直接访问是 404，需要显式映射：
+
+```java
+registry.addResourceHandler("/uploads/**")
+        .addResourceLocations("file:./uploads/");
+```
+
+### 3. 归属校验
+
+`GET /prescriptions/{id}` 早期实现了 `userId` 参数却没有使用——任何人凭自增 id 就能读到他人处方，
+属于典型的水平越权（IDOR）。现在会校验 `prescription.userId` 与登录用户一致，不一致按「不存在」处理。
+
 ## 项目结构
 
 ```
@@ -168,8 +207,9 @@ server/
 │   │   └── GlobalExceptionHandler.java  # 全局异常处理
 │   ├── config/
 │   │   ├── SecurityConfig.java          # BCrypt + 无状态 Session
-│   │   ├── WebConfig.java               # CORS + 拦截器注册
+│   │   ├── WebConfig.java               # CORS + 拦截器注册 + /uploads 静态映射
 │   │   ├── RedisConfig.java             # Lua 脚本注册为 Bean
+│   │   ├── MybatisMetaObjectHandler.java # 统一填充 createdAt / updatedAt
 │   │   └── DataInitializer.java         # 启动时初始化用户/药品/评价
 │   ├── cache/
 │   │   ├── CacheKeys.java               # Redis key 统一收口
@@ -228,7 +268,10 @@ mvn spring-boot:run
 
 5. 打开前端
 
-浏览器打开 `client/index.html`，或直接调 API：`http://localhost:3000/api/v1/medicines`
+- **Android 客户端**：[medicine-android](https://github.com/rpcmzpz/medicine-android)
+  （Jetpack Compose，模拟器通过 `10.0.2.2:3000` 直连本服务）
+- 或浏览器打开 `client/index.html`
+- 或直接调 API：`http://localhost:3000/api/v1/medicines`
 
 ## 验证缓存是否生效
 
@@ -273,7 +316,13 @@ cd server && mvn test -DexcludedGroups=
 | pharmacist | pharmacist123 | 药师 |
 | delivery | delivery123 | 配送员 |
 
-普通用户通过注册页面自行创建。
+普通用户调注册接口创建（Android 客户端暂无注册页）：
+
+```bash
+curl -X POST http://localhost:3000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test001","password":"Test1234","phone":"13800000001"}'
+```
 
 ## API 接口
 
@@ -286,7 +335,7 @@ cd server && mvn test -DexcludedGroups=
 | 药品 | /medicines | 分类、搜索、排序、详情（Redis 缓存）、评价 |
 | 购物车 | /cart | 增删改查 |
 | 订单 | /orders | 下单、支付、取消、确认收货 |
-| 处方 | /prescriptions | 上传处方图片 |
+| 处方 | /prescriptions | 上传处方图片、查询审核状态 |
 | 配送 | /delivery | 配送员接单、状态更新 |
 | 咨询 | /consultations | 用户咨询、药师回复 |
 | 提醒 | /reminders | 用药提醒 CRUD |
